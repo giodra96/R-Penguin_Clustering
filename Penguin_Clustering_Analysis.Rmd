@@ -1,0 +1,1203 @@
+---
+title: "La Data Science applicata alla tassonomia: un approccio statistico alla classificazione di tre specie di pinguini"
+author: "Giorgio Dramis, Claudia Galdini, Sara Germano"
+date: "2024-04-23"
+output: html_document
+---
+
+# Introduzione
+
+Lo studio svolto nel presente elaborato si propone di raggiungere una clusterizzazione efficace di un dataset di pinguini, appartenenti a diverse specie, originari di diverse isole, e con caratteristiche anatomiche differenti tra loro.
+
+L'analisi è stata condotta fondamentalmente con scopo di comprensione della struttura tassonomica di questi animali: il clustering può aiutare a identificare sottospecie o gruppi con caratteristiche simili, contribuendo ad una migliore comprensione della diversità biologica all'interno delle varie famiglie dei pinguini.
+
+# Descrizione del dataset
+
+Come menzionato nell’introduzione, il __[dataset](https://www.kaggle.com/code/pranavkasela/different-ways-of-clustering-penguins/input?select=penguins_size.csv)__ utilizzato per l’analisi è un insieme di **344 osservazioni**, ciascuna facente riferimento ad un diverso esemplare di pinguino, con relative caratteristiche. Gli attributi di partenza sono 7, tutti interi meno due categorici:
+
+* "Species": specie di appartenenza. Nel dataset ve ne sono tre: Adelie, Chinstrap, Gentoo.
+* "Island": isola di appartenenza. Sono anch'esse tre, tutte facenti parte dell'arcipelago delle Isole Shetland Meridionali, a nord della Penisola Antartica: Biscoe, Dream, Torgersen.
+* "Culmen length [mm]": lunghezza del becco, espressa in millimetri.
+* "Culmen depth [mm]": spessore del becco, espresso in millimetri.
+* "Flipper lenght [mm]": lunghezza delle ali, espressa in millimetri.
+* "Body mass [g]": peso, espresso in grammi.
+* "Sex": sesso dell'esemplare.
+
+```{r packages, echo=FALSE, message=FALSE, warning=FALSE}
+#install.packages("FactoMineR", type="binary")
+#install.packages("factoextra")
+#install.packages("clValid")
+#install.packages("hopkins")
+#install.packages("mclust")
+#install.packages("mixtools")
+#install.packages(c("dplyr", "ggplot2", "plotly", "caret", "car", "corrplot", "tidyverse", "caret"))
+
+library(FactoMineR)
+library(cluster) 
+library(NbClust) 
+library(hopkins)
+library(clValid) 
+library(factoextra) 
+library(fpc) 
+library(mvtnorm)
+library(mclust) 
+library(mixtools)
+library(MASS)
+
+library(caret)
+library(ggplot2)
+library(corrplot)
+library(plotly)
+library(dplyr)
+library(caret)
+library(car)
+library(GGally)
+library(tidyverse)
+```
+
+```{r inport, echo=TRUE, message=FALSE, warning=FALSE}
+data <- read.csv("penguins_size.csv")
+glimpse(data)
+```
+___
+
+# Pre-processamento dei dati e pulizia del dataset
+
+Prima di procedere con l'analisi, è necessario fare delle operazioni per correggere imperfezioni nei dati e renderli omogenei, o per eliminare eventuali **multicollinearità** tra le variabili o **outliers** che possano confondere i modelli.
+
+```{r preprocessing, echo=FALSE, message=FALSE, warning=FALSE}
+# Individuazione eventuali valori NA
+valori_null <- is.na(data)
+data_null <- data[rowSums(valori_null)>0, ] 
+data <- na.omit(data) #eliminazione valori Na
+
+# Individuazione eventuali duplicati
+duplicati <- data[duplicated(data) | duplicated(data, fromLast = TRUE), ] # non vengono rilevati duplicati
+```
+
+# Osservazione preliminare del dataset
+
+Di seguito si visualizzano alcuni grafici per studiare la distribuzione delle osservazioni rispetto ad alcuni attributi.
+
+## Distribuzione per sesso degli esemplari
+```{r sex, echo=FALSE, message=FALSE, warning=FALSE}
+# eliminazione di un'osservazione di sesso non specificato
+data <- subset(data, sex %in% c("MALE", "FEMALE"))
+# grafico a torta per sesso degli esemplari di pinguino
+frequenze <- table(data$sex)
+pie(frequenze, labels = c("Maschi", "Femmine"), col = c("#77DD77", "#F7D451"))
+```
+
+## Distribuzione per specie degli esemplari
+```{r species, echo=FALSE, message=FALSE, warning=FALSE}
+# grafico a torta per specie degli esemplari di pinguino
+frequenze <- table(data$species)
+pie(frequenze, labels = c("Adelie", "Chinstrap", "Gentoo"), col = c("#99D9EA", "violet", "#FF7F50"))
+table(data$species)
+```
+
+## Distribuzione per isola degli esemplari
+```{r island, echo=FALSE, message=FALSE, warning=FALSE}
+# grafico a torta per isola degli esemplari di pinguino
+frequenze <- table(data$island)
+pie(frequenze, labels = c("Biscoe", "Dream", "Torgersen"), col = c("#77DD77", "#99D9EA", "#F7D451"))
+table(data$island)
+```
+
+## Distribuzione per peso degli esemplari
+```{r weight, echo=FALSE, message=FALSE, warning=FALSE}
+# istogramma della distribuzione per peso del pinguino 
+hist(data$body_mass_g, 
+     breaks = 80, # Numero di barre
+     main = "",
+     xlab = "Peso [g]",
+     ylab = "Esemplari", 
+     col = "#99D9EA")
+```
+
+## Distribuzione per lunghezza dell'ala degli esemplari
+```{r flipper, echo=FALSE, message=FALSE, warning=FALSE}
+# istogramma della lunghezza dell'ala
+hist(data$flipper_length_mm, col= "#F7D451", main = "", xlab="Lunghezza ala", ylab="Esemplari")
+```
+
+## Matrice di scatterplots, boxplots, correlazioni e curve di densità
+
+Ultimo grafico di questa sezione è una matrice in cui ogni cella mostra la relazione tra due variabili del dataset, con i punti colorati in base al sesso degli esemplari (il rosa corrisponde alle femmine e l'azzurro ai maschi). Questa visualizzazione permette di identificare rapidamente pattern e correlazioni tra le variabili.
+
+```{r ggpairs, echo=FALSE, message=FALSE, warning=FALSE}
+# ulteriore grafico per visualizzare più caratteristiche insieme
+options(repr.plot.width=12, repr.plot.height=8)
+ggpairs(data[,-c(1,2)],aes(color=sex))+theme_bw(base_size = 16) 
+```
+
+# Relazioni tra le variabili: matrice di correlazione
+
+Nella ricerca di pattern e tendenze tra i dati, la matrice di correlazione costituisce uno strumento prezioso. Soprattutto nell'ambito del clustering, è importante identificare quali attributi si influenzino a vicenda.
+
+Di seguito sono riassunte le correlazioni più significative all'interno del dataset:
+
+```{r cormatrix, echo=FALSE, message=FALSE, warning=FALSE}
+
+encode_labels <- function(column) {
+  unique_labels <- unique(column)
+  labels_to_numbers <- as.numeric(factor(column, levels = unique_labels))
+  return(labels_to_numbers)
+}
+
+# l'attributo relativo al sesso viene trasformato in numerico (MALE,FEMALE)=(0,1)
+data$sex<-as.numeric(as.character(factor(data$sex, c("MALE", "FEMALE"), labels=c(0,1)))) 
+# specie e isola (categorici) subiscono anch'essi una modifica
+data$species <- as.numeric(as.factor(data$species))
+data$island <- as.numeric(as.factor(data$island))
+
+cormatrix <- cor(data)
+cormatrix
+
+heatmap(cormatrix, 
+        symm = TRUE,  # simmetrica
+        col = colorRampPalette(c("#99D9EA", "white", "#FF7F50"))(100), 
+        main = "Heatmap della correlazione tra attributi")
+
+```
+
+Il **peso** dell'esemplare risulta correlato, intuitivamente, alla **lunghezza delle ali** e alle **dimensioni del becco** (sia spessore e, in misura maggiore, lunghezza).
+
+Altra correlazione osservabile esiste tra le due dimensioni del becco e lunghezza delle ali. Qui si possono effettuare delle considerazioni... È noto che la correlazione indichi solo una **relazione statistica** tra due variabili, e non implichi necessariamente un rapporto di causa-effetto. In questo caso, sia la lunghezza delle ali che la lunghezza/spessore del becco potrebbero essere fattori confondenti che influenzano la variabile del peso, creando una **correlazione virtuale** anche tra le prime due caratteristiche.
+
+L'isola di provenienza è correlata con la specie e con le dimensioni dell'animale. La specie a sua volta è correlata a peso, lunghezza del becco e lunghezza delle ali, quest'ultima in particolare.
+
+Infine il **sesso** e il **peso** dell'animale mostrano un'ulteriore correlazione, suggerendo che gli esemplari di peso maggiore siano generalmente maschi.
+
+Con l'eliminazione della variabile relativa alla specie (variabile sulla quale si vuole fare clustering) e quella relativa all'isola di provenienza (a causa delle correlazioni alte in media che ha con gli altri attributi), restano per fare clustering un totale di 5 variabili. 
+
+Sulla base di una prima analisi, tale dimensionalità è considerata accettabile senza necessità di PCA. Nonostante ciò, la PCA verrà comunque effettuata più avanti, per esplorare uno spazio ridotto alla ricerca di un aumento dell'accuratezza dei risultati, e per esaminare tutte le possibilità offerte dagli strumenti di clustering.
+
+___
+
+# Assessment della tendenza al clustering
+## Effettuato con visualizzazione attraverso grafici, statistica di Hopkins e algoritmo VAT (matrice di dissimilarità)
+
+Un problema significativo nell'analisi dei cluster è che i metodi di clustering restituiscono un risultato anche se i dati non presentano una struttura a cluster ben definita. In altre parole, applicare un metodo di clustering a un dataset qualsiasi porterà comunque ad una divisione dei dati, ma non è detto che tale divisione abbia senso.
+
+Per questo è importante fare un assessment preliminare dell'**idoneità** del dataset alla clusterizzazione.
+
+## Analisi grafica
+
+```{r assessment_grafico, echo=FALSE, message=FALSE, warning=FALSE}
+
+backup<-data # creazione di un dataset di backup 
+df<-scale(data[,-c(1,2)]) # standardizzazione perché le variabili sono espresse in unità di misura differenti
+
+pairs(df, gap =0, pch=16)
+```
+
+Già da questi scatterplot preliminari si individua la presenza di almeno due cluster. Per verificare se l'intuizione è corretta, si utilizza rapidamente il **k-Means** senza prestare troppa attenzione ai dettagli:
+
+```{r k_means_temp, echo=TRUE, message=FALSE, warning=FALSE}
+set.seed(123)
+km.temp <- kmeans(df, 2) # tentativo con 2 cluster che sono quelli che si intuiscono visivamente
+cl1 <- km.temp$cluster
+pairs(df, gap=0, pch=cl1, col=c( "#77DD77", "#F7D451")[cl1])
+```
+
+Conferma ricevuta: dando in input all'algoritmo k=2 aleatoriamente, i due cluster individuati nel piano sono visibilmente distinguibili. Il k-Means verrà ripetuto più avanti, assieme ad altri metodi, con l'adeguato numero di cluster k in input.
+
+Prima di procedere alla computazione della statistica di Hopkins e algoritmo VAT, una breve parentesi doverosa, che verrà ripresa più avanti nel dettaglio, per visualizzare una rappresentazione non più deterministica, come quella appena offerta dal k-Means, ma probabilistica, attraverso l'uso dei **Mixture Models Gaussiani (GMM)**.
+
+```{r parentesi_GMM, echo=FALSE, message=FALSE, warning=FALSE}
+# Stima della densità di distribuzione col GMM ad elementi finiti
+plot(densityMclust(df), what = "density", type = "hdr", data = df, points.cex = 0.5) #linee con sfumature diverse e punti nello spazio
+```
+
+A livello grafico, anche dal punto di vista probabilistico continuano ad essere ben distinguibili insiemi aggregati di osservazioni. Si procede con misure più puntuali della tendenza al clustering con statistica di Hopkins e algoritmo VAT.
+
+## Statistica di Hopkins
+
+Un valore prossimo a 1 della statistica di **Hopkins** indica cluster ben definiti, mentre un valore vicino allo 0 indica scarsa aggregazione.
+
+```{r hopkins, echo=TRUE, message=FALSE, warning=FALSE}
+hopkins(df, m=nrow(df)-1) # m=nrows(df)-1 esclude il confronto con se stesso e dà una rappresentazione più realistica della distanza media intra-cluster. Ciò aiuta a fare un assessment più accurato.
+```
+
+Il valore H = 0.997, è molto alto: indica una forte aggregazione dei dati all'interno di ciascuna classe. I punti assegnati allo stesso cluster, in altre parole, sono molto simili tra loro e ben distinti dai punti degli altri cluster.
+
+## Algoritmo VAT
+
+Sigla che sta per **Visual Assessment of cluster Tendency**, usa la matrice di dissimilarità (con distanza euclidea) e "ordina" i quadrati perché siano mostrati graficamente in output all'algoritmo.
+
+```{r VAT, echo=FALSE, message=FALSE, warning=FALSE}
+# calcolo della matrice di dissimilarità
+dis_matrix <- dist(df, method = "euclid") # numero più alto = maggiore dissimilarità
+round(as.matrix(dis_matrix)[1:6, 1:6],digits = 2)
+
+fviz_dist(dis_matrix, show_labels = FALSE) +
+  labs(title = "Ordered Dissimilarity Image (of ODM)") #factoextra package + ggplot2
+```
+
+Ricordando che il <span style="color:red">rosso</span> indica **alta similarità** e il <span style="color:blue">blu</span> **alta dissimilarità**, anche qui si inviduano visualmente dei cluster come nel grafico precedente. L'algoritmo VAT individua la tendenza al clustering in forma visuale contando il numero di quadrati rossi lungo la diagonale. L'immagine generata, a sua volta, mette in evidenza l'esistenza di alcuni cluster. Si conclude, a valle di tutte le valutazioni espresse in questa sezione, che il dataset si presta a clusterizzazione e si **procede con l'implementazione** di algoritmi di clustering.
+
+___
+
+# Clustering
+
+Nelle sezioni a seguire, verrà effettuato clustering con i seguenti algoritmi:
+
+* Gerarchico Divisivo
+* k-Means
+* k-Medoids
+
+Per gli ultimi due, in particolare, laddove è necessario specificare il numero di cluster k a priori, sono stati adoperati i seguenti metodi di stima del numero di cluster:
+
+* Elbow
+* Silhouette
+* GAP Statistic
+* NbClust()
+
+Per ciascun metodo implementato, infine, viene effettuata posteriormente una verifica della bontà dell'algoritmo attraverso i seguenti strumenti:
+
+* Coefficiente Silhouette
+* Indice di Dunn
+* Confronto dei risultati ottenuti con l'etichetta (nota) della specie
+
+___
+
+# Clustering Gerarchico Divisivo
+
+## Clustering
+
+In questo caso specifico, **non** è necessario stabilire il numero di cluster a priori. Viene scelto il clustering divisivo rispetto all'agglomerativo in quanto più adatto a cluster irregolari o sovrapposti, meno sensibile al rumore e con dendrogrammi di più facile interpretazione per dataset di dimensioni ridotte, come il caso preso in esame.
+
+```{r diana1, echo=FALSE, message=FALSE, warning=FALSE}
+res.diana <- diana(dis_matrix) # non vengono considerati altri parametri perché viene data in input la matrice di dissimilarità calcolata in precedenza
+
+#si effettua un taglio nel dendrogramma (scelta reiterata di k=6) e si analizzano i cluster che ne fuoriescono
+fviz_dend(res.diana, k = 6,
+          cex = 0.5, # label size
+          k_colors = c("#99D9EA", "#77DD77", "violet", "#F7D451","#FF7F50", "grey"),
+          color_labels_by_k = TRUE, # colori per cluster
+          rect = TRUE # aggiunta di rettangoli tratteggiati intorno a ciascun cluster
+) 
+
+data$diana <- cutree(res.diana, k = 6)
+data%>%
+  group_by(diana)%>%
+  summarise(C_length_mean= mean(culmen_length_mm),
+            C_depth_mean= mean(culmen_depth_mm),
+            F_length_mean= mean(flipper_length_mm),
+            B_mass_mean= mean(body_mass_g),
+            Sex=(mean(sex)))
+
+fviz_cluster(eclust(df, FUNcluster="diana", k=6, hc_metric="euclidean", hc_method="complete"), dfs, geom = "point")
+```
+
+La prima cosa che salta all'occhio osservando il grafico della distribuzione delle osservazioni su due dimensioni (le prime due che coprono un totale del 85% circa dell'ambiente osservato) è che i cluster risultanti dall'applicazione di questo metodo sono leggermente sovrapposti.
+
+Qualche osservazione sui singoli cluster: uno (il numero 6) contiene le osservazioni di peso maggiore rispetto a tutti gli altri (e si noti anche come siano osservazioni con sesso a prevalenza maschile). Dal lato opposto si colloca il cluster numero 2, con una prevalenza femminile e i pesi minori del dataset. Anche le medie di lunghezza del becco e lunghezza delle ali sono le più piccole rispetto agli altri cluster.
+
+## Result validation
+
+Con le tecniche illustrate a seguire, si cerca conferma della bontà dell'analisi appena svolta.
+
+## Distanza cofenetica
+
+Quantifica la distanza tra due punti nello spazio dei dati originali in base alla loro distanza nello spazio dei cluster. In altre parole, dice quanto la distanza tra due punti in un dendrogramma rifletta la loro distanza effettiva nei dati originali.
+
+```{r cohpenetic_diana, echo=FALSE, message=FALSE, warning=FALSE}
+res.coph <- cophenetic(res.diana) # calcolo della distanza cofenetica
+cor(dis_matrix, res.coph) # calcolo della correlazione tra la distanza della matrice di dissimilarità e la distanza cofenetica
+```
+
+La correlazione tra tali distanze è alta, pari a 0.84 la correlazione è alta. Questo è un indice di una buona performance del metodo divisivo.
+
+## Coefficiente Silhouette
+
+* Valori positivi: indicano una buona assegnazione dei punti ai cluster. Più il valore è vicino a 1, migliore è la separazione del punto dal suo cluster rispetto agli altri cluster.
+* Valori negativi: indicano che il punto potrebbe essere meglio assegnato a un altro cluster. Più il valore è vicino a -1, peggiore è la sua assegnazione.
+* Valore 0: indica che il punto è equidistante da due o più cluster.
+
+Tuttavia, il valore del coefficiente è sensibile al metodo di calcolo della distanza e alla forma dei cluster.
+
+```{r silhouette_diana, echo=FALSE, message=FALSE, warning=FALSE}
+fviz_silhouette(eclust(df, FUNcluster="diana", k=6, hc_metric="euclidean", hc_method="complete"))
+```
+
+I coefficienti sono prossimi allo 0.5 per tutti i cluster. In particolare, la media tra tutti i coefficienti è: 0,53. Questo indica una discreta affidabilità del clustering effettuato dal metodo gerarchico divisivo.
+
+Graficamente si osserva come si distribuiscono le silhouette rispetto alla linea tratteggiata in corrispondenza della media, indicando come ad avere un'assegnazione al cluster 'corretto' sono sopratutto le osservazioni appartenenti ai cluster 5 e 6.
+
+## Indice di Dunn
+
+Il suo scopo è identificare cluster che siano sia compatti (i punti all'interno del cluster sono vicini tra loro) sia ben separati (i punti tra cluster diversi sono distanti). Si calcola come il rapporto tra la distanza minima inter-cluster e la distanza massima intra-cluster:
+
+* Compattezza: considera la distanza massima (anche detta dispersione) tra due punti qualsiasi all'interno di un cluster.
+* Separazione: considera la distanza minima (anche detta isolamento) tra due punti qualsiasi in cluster diversi. 
+
+```{r dunn_diana, echo=FALSE, message=FALSE, warning=FALSE}
+
+#Interpretazione del valore:
+
+# 0: I cluster sono completamente sovrapposti.
+# 0,5: I cluster sono ben separati, ma c'è un po' di sovrapposizione.
+# 1: I cluster sono completamente separati e non c'è sovrapposizione.
+
+diana.stats <- cluster.stats(dis_matrix, data$diana)
+diana.stats$dunn
+```
+
+L'indice è pari a 0.18 approssimativamente. Contraddice in parte quanto appena derivato dal metodo silhouette,tuttavia c'è da tenere presente che in corrispondenza di cluster di dimensioni diverse (anche se non drasticamente, come il caso in esame), l'indice di Dunn potrebbe fornire un'indicazione errata.
+
+## Confronto con la specie
+
+```{r confr1, echo=FALSE, message=FALSE, warning=FALSE}
+table(data$diana, backup$species)
+
+x<-backup
+x$cluster <- as.factor(data$diana)
+options(repr.plot.width = 15, repr.plot.height = 7)
+
+ggplot(x, aes(flipper_length_mm, body_mass_g)) + 
+  geom_point(aes(color=cluster), size=3) +
+  facet_wrap(~ species, ncol=3) 
+```
+
+Come mostrato nella table e, più intuitivamente, nel grafico che mette a confrono il peso e la lunghezza dell'ala, i cluster classificano in maniera discretamente soddisfacente i pinguini nelle tre specie del dataset. Unica 'contaminazione', seppur poco significativa, si può osservare nelle prime due specie, con alcune osservazioni appartenenti al cluster 3 ma classificati come specie 1 e, a loro volta, osservazioni del cluster 2 assegnate invece alla specie 2. Si osservi la legenda per una lettura più agevole.
+
+___
+
+Oltre ai risultati appena ottenuti, viene mostrato anche il grafico relativo all'esecuzione del clustering con k=4, anziché uguale a 6:
+
+```{r diana4, echo=FALSE, message=FALSE, warning=FALSE}
+data$diana4 <- cutree(res.diana, k = 4)
+data%>%
+  group_by(diana4)%>%
+  summarise(C_length_mean= mean(culmen_length_mm),
+            C_depth_mean= mean(culmen_depth_mm),
+            F_length_mean= mean(flipper_length_mm),
+            B_mass_mean= mean(body_mass_g),
+            Sex=(mean(sex)))
+
+x<-backup
+x$cluster <- as.factor(data$diana4)
+options(repr.plot.width = 15, repr.plot.height = 7)
+ggplot(x, aes(flipper_length_mm, body_mass_g)) + 
+  geom_point(aes(color=cluster), size=3) +
+  facet_wrap(~ species, ncol=3) 
+
+data<-data[,-9]
+```
+
+Si evince che i cluster **non** contengono tutti lo stesso numero di osservazioni, con i primi due più popolosi degli ultimi due.
+
+Il cluster 4, popolato dai pinguini con le ali più lunghe e i pesi maggiori (le due variabili sono correlate) è a prevalenza maschile (media della variabile sex=0). Si tratta di uno dei 2 gruppi meno popolosi. Tra i cluster più numerosi invece ce n'è uno che si colloca dal lato opposto (il cluster 2): valore minimo di media dei pesi e ali più corte, a prevalenza femminile stavolta. Rispetto ai pinguini del cluster precedente, questi hanno becchi meno lunghi, ma più spessi.
+
+Si noti come il grafico generato con numero di k pari a 4 mostri una più scarsa separazione tra i cluster, confrontato con l'anteriore che invece mostrava maggiore precisione e consentiva una distinzione più netta dei pinguini nelle tre specie. Viene mantenuto il k=6 soprattutto a seguito del confronto tra l'assegnazione delle osservazioni effettuata dal clustering gerarchico divisivo e l'etichetta nota sulla specie (nel dataset originale).
+
+___
+
+# k-Means
+
+L'algoritmo k-Means è un metodo di clustering iterativo che raggruppa i dati in base alla similarità. Inizia con centroidi casuali e iterativamente assegna i punti dati ai cluster più vicini, ricalcolando i centroidi in base alle osservazioni assegnate. Questo processo si ripete fino a quando la configurazione dei cluster converge.
+
+A differenza del caso precedente, con il k-Means è invece necessario stabilire il numero di clusters a priori. Per far ciò, si puo' ricorrere a diverse metodologie.
+
+## Ricerca del k ottimale
+
+## Elbow method
+
+```{r elbow_kmeanss, echo=FALSE, message=FALSE, warning=FALSE}
+
+fviz_nbclust(df, kmeans, nstart=25, method="wss") + 
+  geom_vline(xintercept = 6, linetype = 2) +
+  labs(title= "Elbow method per il k-Means")
+```
+
+In questo caso il metodo elbow da risultati un po' ambigui perché graficamente non si individua un "gomito" brusco nella curva. Si sceglie k=6 perché è il punto a partire del quale ulteriori clusterizzazioni non portano grandi miglioramenti dal punto di vista del wss (whitin-cluster sum of squares).
+
+## Silhouette method
+
+```{r silhouette_kmeans1, echo=FALSE, message=FALSE, warning=FALSE}
+
+fviz_nbclust(df, kmeans, method="silhouette") +
+  geom_vline(xintercept = 4, linetype = 2) +
+  labs(title= "Silhouette method per il k-Means")
+```
+
+Per k = 4 si ha il valore medio del coefficiente di silhouette più alto: in questo punto i cluster sono più compatti e meglio separati. Da k=4 in poi, all'aumentare del numero di cluster, nonostante ci siano altri massimi locali, non si supera tale valore.
+
+## GAP Statistic
+
+```{r gap_kmeans, echo=FALSE, message=FALSE, warning=FALSE}
+
+fviz_nbclust(df, kmeans, nstart =25, method = "gap_stat", nboot = 50) +
+  labs(title= "Gap Statistic method per il k-Means")
+```
+
+All'aumentare di k, anche la gap statistic continua a crescere, con un unico piccolo punto di inflessione in corrispondenza di k=6, che verrà preso come numero ideale di cluster.
+
+## Pacchetto NbClust
+
+Ulteriore valutazione con il pacchetto NbClust che determina il numero ottimale di cluster in base al metodo utilizzato e il tipo di distanza tra le osservazioni (se euclidea, manhattan, canberra etc.):
+
+```{r NbClust_kmeans, echo=FALSE, message=FALSE, warning=FALSE}
+
+nb <- NbClust(data = df, diss = NULL, distance = "euclidean",
+              min.nc = 2, max.nc = 10, method = "kmeans")
+```
+
+## Risultati a confronto:
+
+* Elbow: 6 cluster
+* Silhouette: 4 cluster
+* GAP Statistic: 6 cluster
+* NbClust: 4 cluster
+
+Viene effettuato il k-Means con k=6.
+
+## Clustering
+
+```{r kmeans, echo=FALSE, message=FALSE, warning=FALSE}
+
+set.seed(123)
+res.km <- eclust(df, "kmeans", k=6, nstart=50, graph=FALSE)
+
+data$kmeans <- res.km$cluster # aggiunta dell'ultima colonna "kmeans" al dataframe iniziale (NON standardizzato perché serve osservare i dati originali)
+data%>%
+  group_by(kmeans)%>%
+  summarise(C_length_mean= mean(culmen_length_mm),
+            C_depth_mean= mean(culmen_depth_mm),
+            F_length_mean= mean(flipper_length_mm),
+            B_mass_mean= mean(body_mass_g),
+            Sex=(mean(sex)),
+            Count=(length(kmeans))) #aggiunta di un'ultima colonna con il numero di osservazioni appartenenti a ciascun cluster
+
+fviz_cluster(res.km, geom="point", ellipse.type="norm",
+                          palette=c("#99D9EA", "#77DD77", "violet", "#F7D451","#FF7F50", "orange"), 
+                          ggtheme=theme_minimal())
+```
+
+
+Il cluster più popoloso (78 osservazioni), il numero 2, si compone sopratttutto di esemplari femmine (media di "sex" 1), di peso relativamente basso (il più basso in media tra tutti i cluster, insieme alla lunghezza dell'ala e la lunghezza del becco - queste variabili sono correlate per cui non si tratta di un risultato sorprendente). Tra i cluster più scarni, quello con le dimensioni del becco maggiori è il numero 3, con 36 osservazioni, formato prevalentemente da esemplari di sesso maschile. Il cluster contenente gli esemplari di peso maggiore in media, il numero 4, è formato soprattutto da maschi, con l'apertura alare maggiore rispetto a tutti gli altri.
+
+## Result Validation
+
+## Coefficiente Silhouette
+
+```{r silhouette_kmeans, echo=FALSE, message=FALSE, warning=FALSE}
+
+KMEANS1_S <- fviz_silhouette(eclust(df, FUNcluster="kmeans", k=6, hc_metric="euclidean", hc_method="complete", graph=FALSE))
+KMEANS1_S
+```
+
+Il risultato dato dal coefficiente silhouette è molto simile a quello ottenuto applicando il clustering gerarchico. Anche se le silhouette hanno forme e spessori diverse rispetto al caso anteriore, la media dei sei cluster è uguale e pari a 0,53.
+
+## Indice di Dunn
+
+```{r dunn_kmeans, echo=FALSE, message=FALSE, warning=FALSE}
+
+km.stats <- cluster.stats(dis_matrix, data$kmeans)
+km.stats$dunn
+```
+
+Analogamente al caso Silhouette, l'indice di Dunn è equivalente a quello dell'algoritmo Diana.
+
+## Confronto con la specie
+
+```{r species_kmeans, echo=FALSE, message=FALSE, warning=FALSE}
+
+table(res.km$cluster, backup$species)
+
+x<-backup
+x$cluster <- as.factor(res.km$cluster)
+options(repr.plot.width = 15, repr.plot.height = 7)
+
+ggplot(x, aes(flipper_length_mm, body_mass_g)) + 
+  geom_point(aes(color=cluster), size=3) +
+  facet_wrap(~ species, ncol=3) 
+```
+
+Per concludere, anche la rappresentazione bidimensionale dei dati è identica a quella proposta dal clustering gerarchico divisivo.
+
+___
+
+# k-Medoids
+
+A differenza del k-Means, il k-Medoids usa centroidi "reali": non calcolati come medie, ma scelti tra i punti effettivamente presenti nel dataset. Questo lo rende più resistente a valori anomali e rumore. Altra differenza col k-Means è che non si basa sulla distanza euclidea, ma utilizza una misura di dissimilarità più generale, come la distanza di Manhattan o la distanza di Chebyshev.
+
+Offre infine maggiore flessibilità nella scelta del numero di cluster (k) e nella selezione dei medoidi iniziali. Viene utilizzato l'algoritmo PAM (partitioning around medoids) agevolmente nelle sezioni a seguire, visto che si tratta di un dataset con meno di 2000 osservazioni.
+
+Tuttavia, si tene presente che una bassa dimensionalità potrebbe portare ad una scelta dei medoidi equivalente a quella dei centroidi appena effettuata con il k-Means, portando di conseguenza agli stessi risultati (di fatto, si scoprirà alla fine dell'implementazione che ciò si verifica).
+
+## Ricerca del k ottimale
+
+## Elbow method
+
+```{r elbow_pam, echo=FALSE, message=FALSE, warning=FALSE}
+
+fviz_nbclust(df, pam, nstart=25, method="wss") + 
+  geom_vline(xintercept = 6, linetype = 2) +
+  labs(title= "Elbow method per il k-Medoids")
+```
+
+Anche in questo caso si sceglie K=6, essendo il punto a partire del quale ulteriori clusterizzazioni non implicano miglioramenti significativi dal punto di vista del wss (whitin-cluster sum of squares).
+
+## Silhouette method
+
+```{r sil_pam, echo=FALSE, message=FALSE, warning=FALSE}
+
+fviz_nbclust(df, pam, method="silhouette") +
+  geom_vline(xintercept = 6, linetype = 2) +
+  labs(title= "Silhouette method per il k-Medoids")
+```
+
+Per k = 6, si ha il valore medio del coefficiente di silhouette maggiore, similamente al caso anteriore col k-Means.
+
+## GAP Statistic
+
+```{r gap_pam, echo=FALSE, message=FALSE, warning=FALSE}
+
+fviz_nbclust(df, pam, nstart =5, method = "gap_stat", nboot = 5) +
+  labs(title= "Gap Statistic method per il numero ottimale di clusters k") # hang in there
+```
+
+Si ottengono risultati analoghi: unico punto di inflessione in corrispondenza di k=6.
+
+## Pacchetto NbClust
+
+```{r nbclust_pam, echo=FALSE, message=FALSE, warning=FALSE}
+
+nb <- NbClust(data = df, diss = NULL, distance = "euclidean",
+              min.nc = 2, max.nc = 10, method = "kmeans")
+```
+
+## Risultati a confronto:
+
+* Elbow: 6 cluster
+* Silhouette: 6 cluster
+* GAP Statistic: 6 cluster
+* NbClust: 4
+
+Ancora una volta si decide di scegliere k=6 come numero di clusters.
+
+## Clustering
+
+```{r pam, echo=FALSE, message=FALSE, warning=FALSE}
+res.pam <- pam(df, 6)
+
+data$kmedoids <- res.pam$cluster # aggiunta dell'ultima colonna "kmedoids" al dataframe iniziale (NON standardizzato perché serve osservare i dati originali)
+data%>%
+  group_by(kmedoids)%>%
+  summarise(C_length_mean= mean(culmen_length_mm),
+            C_depth_mean= mean(culmen_depth_mm),
+            F_length_mean= mean(flipper_length_mm),
+            B_mass_mean= mean(body_mass_g),
+            Sex=(mean(sex)),
+            Count=(length(kmedoids))) # aggiunta di una colonna col conto del numero di osservazioni 
+
+# i cluster ottenuti visivamente
+
+fviz_cluster(res.pam, geom="point", ellipse.type="norm",
+             palette=c("#99D9EA", "#77DD77", "violet", "#F7D451","#FF7F50", "orange"),
+             ggtheme=theme_minimal())
+```
+
+Attraverso un'osservazione dei dati nella table, si evince come i risultati appena ottenuti non si distacchino eccessivamente da quelli prodotti dal k-Means. In particolare, il cluster numero 6 che si legge in questa tabella corrisponde perfettamente al cluster numero 4 generato dal k-Means.
+
+Il fatto che i risultati siano paragonabili non è anomalo in determinate condizioni, corrispondenti a quelle del caso in esame: 
+
+* In dataset "piccoli", la scelta di medoidi vs centroidi ha generalmente un impatto minore, cosa che rende i risultati più simili.
+* Altro punto importante è la scelta del numero di cluster (k=6). Il fatto che entrambi gli algoritmi usino lo stesso k contribuisce a farli convergere verso la stessa soluzione.
+* Distribuzione uniforme: se i dati sono uniformemente distribuiti nello spazio delle caratteristiche, entrambi gli algoritmi potrebbero assegnare i punti ai cluster in modo simile.
+
+## Result validation
+
+## Coefficiente Silhouette
+
+```{r silhouette_pam, echo=FALSE, message=FALSE, warning=FALSE}
+fviz_silhouette(eclust(df, FUNcluster="pam", k=6, hc_metric="euclidean", hc_method="complete"))
+```
+
+La media dei coefficienti è uguale ai due casi precedenti: 0,53.
+
+## Indice di Dunn
+
+```{r dunn_pam, echo=FALSE, message=FALSE, warning=FALSE}
+
+kmed.stats <- cluster.stats(dis_matrix, data$kmedoids)
+kmed.stats$dunn
+```
+
+Risultato peggiore dei casi precedenti, anche qui l'indice di Dunn è piccolo, pari a 0,17.
+
+## Confronto con la specie
+
+```{r species_pam, echo=FALSE, message=FALSE, warning=FALSE}
+
+table(res.pam$cluster, backup$species)
+
+x<-backup
+x$cluster <- as.factor(res.pam$cluster)
+options(repr.plot.width = 15, repr.plot.height = 7)
+ggplot(x, aes(flipper_length_mm, body_mass_g)) + 
+  geom_point(aes(color=cluster), size=3) +
+  facet_wrap(~ species, ncol=3) 
+```
+
+Il risultato ottenuto confrontando l'esito del k-Medoids con le etichette di cui si dispone nel dataaset originale non differisce dal caso del k-Means con k=6.
+
+___
+
+# Confronto tra i tre algoritmi adoperati
+
+## Confronto interno
+
+Innanzitutto si mettono a confronto connettività, indice di Dunn e metodo Silhouette, con un confronto interno.
+
+Un valore di connettività vicino a 0 suggerisce un cluster ben separato, in cui la maggior parte dei punti ha "vicini" appartenenti allo stesso cluster. Al contrario, un valore di connettività più alto (lontano da 0) indica un cluster scarsamente separato, in cui i punti potrebbero avere vicini appartenenti ad altri cluster tra i loro k vicini più prossimi.
+
+```{r internal_validation, echo=FALSE, message=FALSE, warning=FALSE}
+
+clmethods <- c("diana","kmeans","pam")
+internal_val <- clValid(df, nClust = 4:6, clMethods = clmethods, validation = "internal")
+summary(internal_val)
+```
+
+Ciò che deriva da questo confronto è inequivocabile: a riportare i migliori valori per i tre indici è il metodo gerarchico divisivo. In particolare, per numero di cluster pari a 6 (Silhouette) e 4 (Dunn e indice di connettività).
+
+Per complementare questo confronto, si ricorre ulteriormente alle misure di stabilità.
+
+## Misure di stabilità
+
+Variante speciale delle misure interne che valuta la stabilità di un risultato di clustering confrontandolo con i cluster ottenuti rimuovendo una colonna alla volta. Queste misure includono la proporzione media di non sovrapposizione (APN), la distanza media (AD), la distanza media tra medie (ADM) e la misura di merito (FOM).
+
+* APN (Average Proportion of Non-overlap): Misura la percentuale media di osservazioni non assegnate allo stesso cluster sia nella condizione originale che in quella con una colonna rimossa.
+* AD (Average Distance): Calcola la distanza media tra osservazioni assegnate allo stesso cluster in entrambi i casi (originale e con colonna rimossa).
+* ADM (Average Distance between Means): Misura la distanza media tra i centri dei cluster per le osservazioni assegnate allo stesso cluster in entrambi i casi.
+* FOM (Figure of Merit): Calcola la varianza intra-cluster media della colonna eliminata, considerando il clustering basato sulle colonne rimanenti (non eliminate).
+
+```{r stability, echo=FALSE, message=FALSE, warning=FALSE}
+
+stab <- clValid(df, nClust = 4:6, clMethods = clmethods, validation = "stability")
+summary(stab)
+```
+
+Anche in questa seconda verifica viene favorito il clustering gerarchico divisivo da tre su quattro misure. L'unica in 'disaccordo' è la misura di merito, che elegge invece il k-Means con 6 clusters.
+
+In generale, L'indice di Dunn, il metodo Silhouette, FOM, APN, AD e ADM misurano tutti aspetti differenti della qualità del clustering. Non esiste una risposta definitiva univoca su quale algoritmo tra i tre messi a confronto sia il più adatto al dataset esamianto, almeno non basandosi esclusivamente su queste metriche di valutazione senza informazioni addizionali. Infatti, Un algoritmo potrebbe avere un valore alto per una metrica e un valore più basso per un'altra. Spesso c'è un compromesso tra compattezza (similarità all'interno del cluster) e separazione (differenza tra cluster).
+
+Ad essere determinante nella scelta, è quale sia l'obiettivo dell'analisi: con le operazioni di clustering su questo dataset l'intenzione è quella di identificare l'eventuale esistenza di clusters quanto più definiti, che enfatizzino le differenze tra i diversi esemplari di pinguini nel dataset per raggiungere una classificazione in specie diverse.
+
+Si valuta che il metodo di clustering gerarchico divisivo effettuato con l'algoritmo diana e k=6 sia quello più attendibile per il raggiungimento degli obiettivi relativi a questo studio.
+
+___
+
+# PCA
+
+Nella presente sezione viene effettuata la PCA per valutare se l'utilizzo delle componenti principali, al posto degli attributi originali del dataset, possa portare a un miglioramento dei risultati di clustering.
+
+```{r pca, echo=FALSE, message=FALSE, warning=FALSE}
+res.pca <- PCA(scale(backup[,-c(1,2)]), graph = FALSE)
+print(res.pca)
+
+# Calcolo delle componenti principali
+cp <- get_eigenvalue(res.pca)
+cp
+```
+
+Sulla base dei risultati ottenuti, si decide di scegliere solo le prime due componenti principali: innanzi tutto, le ultime tre componenti principali non hanno autovalore superiore a 1; secondariamente, combinando la prima e la seconda, la varianza percentuale cumulata arriva a un valore soddisfacente di 85% dello spazio di osservazioni originale.
+
+Anche dal punto di vista grafico si può raggiungere la stessa conclusione:
+```{r screeplot, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Scree Plot: un metodo visuale per determinare il numero di componenti principali
+fviz_eig(res.pca, addlabels = TRUE, ylim = c(0, 50))
+```
+
+Dal punto di vista delle correlazioni tra le variabili originali e le nuove componenti principali, anche questi risultati confermano quanto appena stabilito:
+
+```{r varcoord, echo=FALSE, message=FALSE, warning=FALSE}
+# correlation plot
+var <- get_pca_var(res.pca)  
+var$coord
+
+fviz_pca_var(res.pca, col.var = "contrib",
+             gradient.cols = c("#99D9EA", "#F7D451", "#FF7F50")
+)
+
+round(var$contrib,digits = 3)
+corrplot(var$contrib, is.corr=FALSE)
+```
+
+Da quest'ultimo grafico si evince ancora più chiaramente come le prime due componenti siano già sufficienti a "coprire" l'intero spazio originale. La seconda è rappresentativa in particolare dello spessore del becco e del sesso. la prima, anche se in maniera meno marcata, è influenzata quasi da tutti gli attributi originali.
+
+Il dettaglio delle percentuali del contributo di ciascuna delle due prime componenti principali:
+
+```{r componenti1&2, echo=FALSE, message=FALSE, warning=FALSE}
+fviz_contrib(res.pca, choice = "var", axes = 1, top = 10)
+fviz_contrib(res.pca, choice = "var", axes = 2, top = 10)
+```
+
+Queste ultime vengono formattate come dataset e si prosegue con l'analisi su di esse.
+
+```{r df_pca, echo=FALSE, message=FALSE, warning=FALSE}
+# creazione nuovo dataset
+df_pca <- as.data.frame(res.pca$ind$coord)
+
+df_pca<-df_pca[,-c(3,4,5)]
+names(df_pca)[1] <- "Dim1"
+names(df_pca)[2] <- "Dim2"
+
+pairs(df_pca, gap =0, pch=16)
+```
+
+Da questi scatterplot si individua la presenza molto ben definita di quattro cluster separati.
+
+___
+
+## Gerarchico Divisivo (PCA)
+
+```{r diana_pca, echo=FALSE, message=FALSE, warning=FALSE}
+
+# applicazione del diana() al nuovo dataset a seguito della PCA
+
+# calcolo della nuova matrice di dissimilarità
+dis_matrix_pca <- dist(df_pca, method = "euclid") # numero più alto = maggiore dissimilarità
+round(as.matrix(dis_matrix_pca)[1:6, 1:6],digits = 2)
+
+res.diana_pca <- diana(dis_matrix_pca) 
+
+#si effettua un taglio nel dendogramma (scelta di k=4 sulla base dello scatterplot precedente) e si analizzano i cluster che ne fuoriescono
+fviz_dend(res.diana_pca, k = 4,
+          cex = 0.5, # label size
+          k_colors = c("#99D9EA", "#77DD77", "violet","#FF7F50"),
+          color_labels_by_k = TRUE, # colori per cluster
+          rect = TRUE # aggiunta di rettangoli tratteggiati intorno a ciascun cluster
+) 
+
+df_pca$diana_pca <- cutree(res.diana_pca, k = 4)
+df_pca%>%
+  group_by(diana_pca)%>%
+  summarise(Dim1=mean(Dim1),
+            Dim2=mean(Dim2))
+
+fviz_cluster(eclust(df_pca, FUNcluster="diana", k=4, hc_metric="euclidean", hc_method="complete"), dfs, geom = "point")
+```
+
+Graficamente la suddivisione nei 4 cluster è molto netta e precisa. Viene effettuata la validazione dei risultati:
+
+## Result validation: Distanza cofenetica
+
+```{r diana_pca_result_validation1, echo=FALSE, message=FALSE, warning=FALSE}
+res.coph_pca <- cophenetic(res.diana_pca) 
+cor(dis_matrix_pca, res.coph_pca) 
+```
+
+## Result validation: Coefficiente Silhouette
+
+```{r diana_pca_result_validation2, echo=FALSE, message=FALSE, warning=FALSE}
+fviz_silhouette(eclust(df_pca, FUNcluster="diana", k=4, hc_metric="euclidean", hc_method="complete"))
+```
+
+Il metodo Silhouette riporta un valore di media pari a 0,7 circa. Superiore ai metodi implementati prima di effettuare la PCA.
+
+## Result validation: Indice di Dunn
+
+```{r diana_pca_result_validation3, echo=FALSE, message=FALSE, warning=FALSE}
+diana.stats_pca <- cluster.stats(dis_matrix_pca, df_pca$diana_pca)
+diana.stats_pca$dunn
+```
+
+___
+
+## k-Means (PCA)
+
+## Ricerca del k ottimale: Elbow
+
+```{r kmeans_pca_k1, echo=FALSE, message=FALSE, warning=FALSE}
+df_pca<-df_pca[,-3]
+
+fviz_nbclust(df_pca, kmeans, nstart=25, method="wss") + 
+  geom_vline(xintercept = 4, linetype = 2)
+```
+
+## Ricerca del k ottimale: Silhouette
+
+```{r kmeans_pca_k2, echo=FALSE, message=FALSE, warning=FALSE}
+fviz_nbclust(df_pca, kmeans, method="silhouette") +
+  geom_vline(xintercept = 4, linetype = 2) 
+```
+
+## Ricerca del k ottimale: Gap Statistic
+
+```{r kmeans_pca_k3, echo=FALSE, message=FALSE, warning=FALSE}
+fviz_nbclust(df_pca, kmeans, nstart =25, method = "gap_stat", nboot = 50) +
+  labs(title= "Gap Statistic method per il numero ottimale di clusters k")
+```
+
+## Ricerca del k ottimale: NbClust
+
+```{r kmeans_pca_k4, echo=FALSE, message=FALSE, warning=FALSE}
+nb <- NbClust(data = df_pca, diss = NULL, distance = "euclidean",
+              min.nc = 2, max.nc = 10, method = "kmeans")
+```
+
+Risultati a confronto:
+
+* Elbow: 4 cluster
+* Silhouette: 4 cluster
+* GAP Statistic: 6 cluster
+* NbClust: 4 cluster
+
+
+Viene eseguito il k-Means con k=4.
+
+```{r kmeans_pca, echo=FALSE, message=FALSE, warning=FALSE}
+
+set.seed(123)
+res.km_pca <- eclust(df_pca, "kmeans", k=4, nstart=50, graph=FALSE)
+
+df_pca$kmeans_pca <- res.km_pca$cluster # aggiunta dell'ultima colonna "kmeans_pca" al dataframe iniziale (NON standardizzato perché serve osservare i dati originali)
+df_pca%>%
+  group_by(kmeans_pca)%>%
+  summarise(Dim1=mean(Dim1),
+            Dim2=mean(Dim2))
+
+fviz_cluster(res.km_pca, geom="point", ellipse.type="norm",
+                    palette=c("#99D9EA", "#77DD77", "violet", "#F7D451"), 
+                    ggtheme=theme_minimal())
+```
+
+## Result validation: Coefficiente Silhouette
+
+```{r kmeans_pca_validation, echo=FALSE, message=FALSE, warning=FALSE}
+KMEANS2_S <- fviz_silhouette(eclust(df_pca, FUNcluster="kmeans", k=4, hc_metric="euclidean", hc_method="complete", graph=FALSE))
+KMEANS2_S
+```
+
+Il coefficiente Silhouette in media è leggermente superiore al caso del clustering gerarchico divisivo.
+
+## Result validation: Indice di Dunn
+
+```{r kmeans_pca_validation1, echo=FALSE, message=FALSE, warning=FALSE}
+km.stats_pca <- cluster.stats(dis_matrix_pca, df_pca$kmeans_pca)
+km.stats_pca$dunn
+```
+
+Non si procede all'implementazione del k-Medoids, vista la similarità dei risultati ottenuti con il k-Means in precedenza.
+___
+
+## Confronto tra i due algoritmi adoperati
+
+```{r clmethods_pca, echo=FALSE, message=FALSE, warning=FALSE}
+
+clmethods_pca <- c("diana","kmeans")
+internal_val <- clValid(df_pca, nClust = 4:6, clMethods = clmethods_pca, validation = "internal")
+summary(internal_val)
+```
+
+I risultati ottenuti portano a preferire l'accuratezza e precisione ottenute a seguito della PCA. In particolare, con il clustering gerarchico divisivo e numero di clusters k=4.
+
+Il fatto che aver effettuato la PCA abbia portato a risultati migliori (soprattutto nel valore del coefficiente Silhouette) non è sorprendente. Questa metodologia di riduzione della dimensionalità del dataset, infatti, consente di:
+
+* Ridurre il rumore o le variabili non informative dai dati, concentrandosi solo sui componenti principali che spiegano la massima varianza nei dati;
+* Gestire meglio la correlazione tra le variabili, evitando che il clustering sia influenzato da variabili fortemente correlate.
+* Migliorare la separazione tra i cluster, riducendo la sovrapposizione nei dati.
+
+___
+
+# Mixture models
+
+Uno dei principali svantaggi degli algoritmi di clustering gerarchico, degli algoritmi k-Means e di altri metodi simili è che si basano principalmente su euristiche e non su modelli formali.
+
+Invece di adottare un approccio euristico per costruire un cluster, il clustering basato su modello utilizza la probabilità. Questo approccio presuppone che i dati siano generati da una distribuzione di probabilità sottostante e cerca di recuperare tale distribuzione dai dati stessi.
+
+Un comune approccio basato su modello è quello che utilizza i finite mixture models, che forniscono un quadro di modellazione flessibile per l'analisi della distribuzione di probabilità. Tali modelli utilizzano una **somma linearmente ponderata di distribuzioni di probabilità dei componenti**.
+
+Il dataset adoperato nella presente sezione non contiene variabili categoriche:
+
+```{r df_mm, echo=FALSE, message=FALSE, warning=FALSE}
+# rimozione della colonna 'sex' prima di dare il dataset in pasto ai mixture models
+df_mm <- as.data.frame(df[,-5])
+glimpse(df_mm)
+```
+
+Si osservino le distribuzioni approssimate delle variabili restanti nel dataset:
+
+```{r EMplos, echo=FALSE, message=FALSE, warning=FALSE}
+source("EM2_plot.r")
+source("mixt2_univ.r")
+
+em2_weight <- EM2_plot(df_mm$body_mass_g, "Distribuzione delle osservazioni per peso")     
+em2_culmen_length <- EM2_plot(df_mm$culmen_length_mm, "Distribuzione della lunghezza del becco")  
+em2_culmen_depth <- EM2_plot(df_mm$culmen_depth_mm, "Distribuzione dello spessore del becco")  
+em2_flipper_length <- EM2_plot(df_mm$flipper_length, "Distribuzione della lunghezza delle ali") 
+```
+
+Attraverso il pacchetto Mclust si applica un algoritmo di clustering basato sulla massima verosimiglianza, per adattare un modello di miscelazione di distribuzioni normali multivariate ai dati.
+
+```{r multiv_model, echo=TRUE, message=FALSE, warning=FALSE}
+multiv_model <- Mclust(df_mm)
+summary(multiv_model, parameters=TRUE)
+```
+
+Il risultato è che il modello più efficace risulta essere il VEE (ellipsoidal, equal shape and orientation) con 4 componenti.
+
+Dai risultati dell'indice di massima verosimiglianza, BIC e ICL, si possono fare alcune osservazioni. Partendo dal grafico del BIC:
+
+```{r bic1, echo=FALSE, message=FALSE, warning=FALSE}
+plot(multiv_model, what = "BIC")
+```
+
+Viene infatti confermata graficamente questa scelta, in corrispondenza del 4 sull'asse delle ascisse (numero di componenti) si osserva un massimo tra le curve che corrisponde al VEE.
+
+```{r dens, echo=FALSE, message=FALSE, warning=FALSE}
+plot(multiv_model, what = "density", type = "hdr", data = df_mm, points.cex = 0.5) 
+```
+
+Quest'altra rappresentazione del modello è un grafico di densità: più è definita la curva al perimetro della forma, più è densa la distribuzione dei dati.
+
+```{r class, echo=FALSE, message=FALSE, warning=FALSE}
+plot(multiv_model, what="classification", points.cex = 0.5)
+```
+
+In questo grafico i punti nel piano sono classificati con colori e forme diverse sulla base del cluster al quale il modello li ha assegnati.
+
+```{r uncert, echo=FALSE, message=FALSE, warning=FALSE}
+plot (multiv_model, what = "uncertainty", points.cex =26)
+```
+
+Infine, quest'ultimo grafico permette di visualizzare l'incertezza associata al modello adottato.
+
+## Valutazione della bontà del clustering
+
+Attraverso il metodo Silhouette, si ottiene una misura dell'accuratezza del metodo appena implementato:
+
+```{r multiv_silhouette, echo=FALSE, message=FALSE, warning=FALSE}
+sil <- silhouette(multiv_model$classification, dist(df_mm))
+summary(sil)
+```
+Con una media di ampiezza delle Silhouette di 0.4, il metodo risulta essere discretamente accurato. 
+
+## Anomaly Detection
+
+Nel contesto dell'Anomaly Detection con GMM, i punteggi di anomalia vengono calcolati basandosi sulla massima verosomiglianza, per ciascuna osservazione. La soglia al di sopra della quale le osservazoni vengono considerate anomale è fissata convenzionalmente a 0,95.
+
+```{r anomaly, echo=FALSE, message=FALSE, warning=FALSE}
+log_likelihoods <- matrix(predict(multiv_model)$z, ncol = multiv_model$G)
+anomaly_scores <- apply(log_likelihoods, 1, max)
+threshold <- quantile(anomaly_scores, 0.95)
+anomalies <- df_mm[anomaly_scores > threshold, ]
+plot(df_mm, pch = 19, col = ifelse(anomaly_scores > threshold, "#FF7F50", "#99D9EA"),
+     main = "Anomaly Detection using Gaussian Mixture Model")
+```
+
+Questi punteggi rappresentano fondamentalmente quanto un'osservazione si discosti dal comportamento generale del dataset.
+
+___
+
+# Riduzione della dimensionalità con Modelli di Miscela Finita Gaussiana
+
+I Gaussian Mixture Models possono gestire dati ad alta dimensionalità, ovvero con molti attributi, senza problemi. Tuttavia, talvolta può risultare utile applicare tecniche di riduzione di tale dimensionalità, come la funzione MclustDR:
+
+* Ciò consente di visualizzare i dati in uno spazio a dimensionalità inferiore (ad esempio, grafici 2D o 3D) per una più facile interpretazione. Per osservare come i dati si raggruppano e di identificare eventuali pattern che potrebbero essere nascosti in una dimensionalità elevata.
+* Inoltre, è uno strumento efficace per identificare le caratteristiche più importanti che contribuiscono alla struttura dei cluster. La riduzione di dimensionalità può aiutare a capire quali caratteristiche sono più significative per distinguere i diversi gruppi presenti nei dati, concentrarsi sulle variabili chiave all'analisi e interpretare i risultati.
+
+```{r red_m_model, echo=TRUE, message=FALSE, warning=FALSE}
+red_m_model <- MclustDR(multiv_model)
+summary(red_m_model)
+```
+
+A giudicare dagli autovalori ottenuti, non tutte e tre le componenti sono necessarie ad una rappresentazione fedele del dataset. Di fatto, ad essere maggiore o uguale ad 1 è solo la prima componente. Graficamente, mantenendo tutte e tre le dimensioni, i risultati sono i seguenti:
+
+```{r red_m_model_3_graphs, echo=FALSE, message=FALSE, warning=FALSE}
+
+plot(red_m_model,what="pairs")
+plot(red_m_model,what="boundaries", ngrid=200)
+plot(red_m_model, what = "density", type = "persp")
+```
+
+Si decide di mantenere solo le prime due componenti principali per l'analisi nelle sezioni seguenti.
+
+## Algoritmo EM
+
+Viene applicato l'algoritmo EM per ottenenere la mistura delle distrubuzioni normali multivariate. La sigla sta per Expectation-Maximization e l'algoritmo è utilizzato principalmente per trovare i valori ottimali dei parametri dei mixture models, tenendo conto delle variabili latenti non osservate.
+
+```{r mvnormalmixEM, echo=FALSE, message=FALSE, warning=FALSE}
+red_m_model <- red_m_model$dir[,-3] # eliminazione della terza direzione con autovalore 0,084
+
+set.seed(763)
+
+df_em <- mvnormalmixEM(red_m_model, k = 3)
+
+plot(df_em, density = TRUE, cex.axis = 1.4, cex.lab = 1.5, cex.main = 1.5, main2 = "Algoritmo EM", ylab2 = "Dir 1", xlab2 = "Dir 2")
+```
+
+Per quanto riguarda la massima verosimiglianza, si noti come la convergenza al valore massimo si raggiunga intorno alla quattordicesima iterazione. Da questo punto in poi, non c'è un cambio sensibile nella curva.
+
+Il secondo grafico, rappresentazione nel piano della distribuzione delle osservazioni lungo le due componenti principali scelte, illustra tre cluster discretamente separati, con pochi punti di sovrapposizione.
+
+Si osservi l'assegnazione di ogni unità del dataset ad una delle tre specie:
+
+```{r prob_mixt_em, echo=FALSE, message=FALSE, warning=FALSE}
+class_mixt_em <- as.numeric(apply(df_em$posterior, MARGIN=1, FUN=which.max))
+class_mixt_em
+```
+
+Un confronto interessante da eseguire è tra l'esito dell'algoritmo k-Means (scelta arbitraria di un algoritmo deterministico) e i risultati appena ottenuti. Si osservino le prime righe del dataset con corrispondenti probabilità di essere assegnate all'uno o all'altro cluster (e le ultime due colonne con il 'verdetto' per i due casi).
+
+```{r confronto_prob_det, echo=FALSE, message=FALSE, warning=FALSE}
+penguin_km <- kmeans(df_mm, centers=3)
+class_km <- penguin_km$cluster
+df_post <- cbind(df_em$posterior,class_mixt_em,class_km)
+colnames(df_post) <- c("probG1", "probG2","probG3", "class_mixt", "class_km")
+head(df_post)
+```
+
+Per un confronto più esplicito:
+```{r confronto_prob_det2, echo=FALSE, message=FALSE, warning=FALSE}
+table(class_mixt_em,class_km)
+```
+
+Dalla table qui mostrata risulta che i cluster ottenuti dai due modelli sono piuttosto simili, fatta eccezione per una ventina di osservazioni che vengono classificate in maniera diversa tra i due.
+
+## LDA (Linear Discriminant Analysis)
+
+Similmente al procedimento effettuato nel campo del discreto con la PCA, anche nel probabilistico si può ridurre la dimensionalità sfruttando una combinazione lineare delle variabili originali che massimizza la separazione tra le classi. Ciò si effettua con l'LDA calcolando le medie e le matrici di covarianza delle variabili per ciascuna specie.
+
+Il dataset utilizzato contiene tutte le caratteristiche standardizzate, meno la colonna della specie che resta numerica:
+
+```{r df_mm_backup, echo=FALSE, message=FALSE, warning=FALSE}
+df_mm <- backup[,-1]
+df_mm$island <- as.numeric(as.factor(df_mm$island))
+df_mm <- scale(df_mm)
+df_mm <- cbind(backup[1],df_mm)
+df_mm$species <- as.numeric(as.factor(df_mm$species))
+
+# as data.frame 
+
+df_mm <- as.data.frame(df_mm)
+glimpse(df_mm)
+```
+
+Applicazione dell'LDA:
+
+```{r df_mm_backup_lda, echo=FALSE, message=FALSE, warning=FALSE}
+
+df_lda <- lda(species ~ ., data=df_mm)
+df_lda
+```
+
+```{r predict_df_lda, echo=FALSE, message=FALSE, warning=FALSE}
+df_lda.values <- predict(df_lda)
+
+# scatterplot semplice
+plot(df_lda.values$x[,1],df_lda.values$x[,2],  cex=0.8,pch=20, xlab="LDA axis 1", ylab="LDA axis 2") 
+# sovrappone al precedente numeretti rossi corrispondenti alle 3 classi
+text(df_lda.values$x[,1],df_lda.values$x[,2],df_lda.values$class,cex=0.7,pos=4,col="#FF7F50") # se eseguito singolarmente nell'R Markdown darà errore perché non viene creato un ambiente grafico - eseguire tutto il chunk
+# scatterplot con i colori
+plot(df_lda.values$x[,1],df_lda.values$x[,2],cex=0.8, col=df_lda.values$class, pch=20, xlab="LDA axis 1", ylab="LDA axis 2") 
+```
+
+Dallo scatterplot delle prime due discriminanti, i tre cluster che rappresentano le tre specie sono graficamente distinguibili e nettamente separati.
+
+Viene inoltre calcolata la probabilità a posteriori per ogni osservazione del dataset. A seguire, viene visualizzato un dataset creato ad-hoc per avere una visione d'insieme in contemporanea della probabilità a posteriori di appartenenza a ciascuna delle tre classi e l'assegnazione finale:
+
+```{r visualizza_lda_result, echo=FALSE, message=FALSE, warning=FALSE}
+lda_result <- cbind(as.data.frame(df_lda.values$posterior),as.data.frame(df_lda.values$class))
+head(lda_result)
+```
+
+Dettaglio sulla matrice di confusione dell'assegnazione effettuata dall'LDA:
+
+```{r confMat.LDA, echo=FALSE, message=FALSE, warning=FALSE}
+# matrice di confusione
+confMat.LDA<-confusionMatrix((as.factor(df_mm$species)), df_lda.values$class)$table
+confMat.LDA
+```
+Già dalla matrice di confusione si deduce che l'accuratezza della predizione sia alta: tutti i pinguini del dataset sono stati assegnati alla specie corretta fatta eccezione per due osservazioni. Ciò è confermato anche, rispettivamente, dall'errore percentuale commesso nella classificazione e, in maniera complementare, l'accuratezza percentuale:
+
+```{r erroneita&accuratezza, echo=FALSE, message=FALSE, warning=FALSE}
+# errore percentuale di erroneità della classificazione
+delta.LDA=(confMat.LDA[1,2]+confMat.LDA[2,1])/nrow(df_mm)*100 
+delta.LDA
+
+# accuratezza in percentuale della previsione effettuata dall'LDA
+accuracy.LDA<-sum(diag(confMat.LDA))/(nrow(df_mm))*100
+accuracy.LDA
+```
+
+## Training set & Test set: bontà della predizione
+
+Per l'ultima sezione dell'analisi, si divide il dataset in due parti: una parte che sarà utilizzata per l'addestramento del modello e un'altra parte che sarà utilizzata per la validazione dello stesso. Le due classi verranno bilanciate automaticamente grazie all'utilizzo del pacchetto caret. Il rapporto scelto per costruire le due partizioni è del 70/30. 
+
+```{r createDataPartition, echo=TRUE, message=FALSE, warning=FALSE}
+set.seed(123)
+train_penguins_rows <- createDataPartition(backup$species, p = 0.7, 
+                                  list = FALSE, 
+                                  times = 1)
+```
+
+Il training set comprende 234 osservazioni. A seguire viene mostrata la distribuzione delle osservazioni nelle tre specie. L'ultima tabella visualizza lo stesso dato in percentuale.
+
+```{r train_stats, echo=FALSE, message=FALSE, warning=FALSE}
+train_penguins <-backup[train_penguins_rows,]
+ntrain_rows<-nrow(train_penguins)
+table(train_penguins$species)
+# table(train_penguins$species)/ntrain_rows*100 # senza arrotondamento
+round(table(train_penguins$species)/ntrain_rows*100,1)
+```
+
+Una volta creato il dataset di addestramento, viene ricavato il dataset di test dalle osservazioni rimanenti, per differenza, con 99 osservazioni:
+
+```{r test, echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(123)
+test_penguins<-backup[-train_penguins_rows,]
+ntest_rows<-nrow(test_penguins)
+table(test_penguins$species)
+# table(test_penguins$species)/ntest_rows*100 
+round(table(test_penguins$species)/ntest_rows*100,1)
+
+```
+Viene a questo punto effettuato il primo dei passaggi, ossia l'addestramento del modello sulla base dei dati del training set. Il risultato è piuttosto soddisfacente, considerando un'accuratezza del 99.6 e la seguente matrice di confusione:
+
+```{r fit, echo=FALSE, message=FALSE, warning=FALSE}
+lda.fit_train=lda(species ~ ., data=train_penguins)  
+lda.predict_train=predict(lda.fit_train,train_penguins)
+pred.class_train=lda.predict_train$class
+confMat.LDA_train=table(train_penguins$species,pred.class_train)
+confMat.LDA_train
+```
+
+Infine, l'ultimo passaggio che resta da fare è testare l'algoritmo. La matrice di confusione che ne deriva è la seguente:
+
+```{r testing, echo=FALSE, message=FALSE, warning=FALSE}
+lda.predict_test=predict(lda.fit_train,test_penguins)
+pred.class_test=lda.predict_test$class
+confMat.LDA_test=table(test_penguins$species,pred.class_test)
+confMat.LDA_test
+```
+
+Volendo confrontare l'accuratezza del metodo appena implementato sul test set e sul training set, si ottengono rispettivamente i due valori di 98.9 e 99.5, ad indicare che la precisione dell'algoritmo era leggermente superiore nel caso dell'addestramento.
+
+```{r confronto, echo=FALSE, message=FALSE, warning=FALSE}
+accuracy.LDA_test<-sum(diag(confMat.LDA_test))/ntest_rows*100
+accuracy.LDA_train<-sum(diag(confMat.LDA_train))/ntrain_rows*100
+accuracy.LDA_test
+accuracy.LDA_train
+```
+
+Ad ogni modo, si tratta di due valori molto alti, prossimi al 100% delle assegnazioni corrette. Il modello si dimostra dunque essere molto efficace nella predizione della specie di appartenenza di ciascun pinguino presente nel dataset sulla base degli attributi presenti.
+
+___
+
+# Conclusioni
+
+Il presente studio ha esplorato l'applicazione di tecniche di clustering per la classificazione delle specie di pinguini utilizzando un dataset comprensivo di diverse variabili biometriche. I principali risultati ottenuti sono i seguenti:
+
+* Metodo più efficace: tra i diversi algoritmi di clustering testati, il metodo **gerarchico divisivo** si è rivelato il più efficace, soprattutto quando è stato applicato con un numero di **cluster pari a 4** (e con una riduzione della dimensionalità).
+* Applicazione della **PCA**: tipicamente, la PCA viene applicata nei casi in cui la grande dimensionalità dei dati (intesa come numero di attributi) non consente un'analisi efficace. Nonostante questo non fosse il caso, la sua applicazione si è comunque rivelata utile: attraverso una riduzione della dimensionalità, infatti, si è indirettamente giunti a migliorare l'accuratezza degli algoritmi, poiché ha contribuito ad **eliminare la sovrapposizione** messa in evidenza durante lo studio e **separare più nettamente** i cluster.
+* Miglioramento dell'accuratezza con i Mixture Models: l'applicazione di questi modelli ha ulteriormente aumentato l'accuratezza del clustering. In particolare, l'applicazione dell'**LDA** e dell'**algoritmo EM** ha portato a risultati più precisi rispetto al caso discreto.
+
+Attraverso questo studio si vuole fornire un contributo alla comprensione delle relazioni tra le variabili biometriche dei pinguini e alla classificazione delle specie. I risultati ottenuti possono essere utili per la comunità scientifica, facilitando la distinzione e la classificazione delle diverse specie di pinguini.
+
+----

@@ -47,7 +47,7 @@ function(x, title_plot)
 	hist(x, freq=F, main=paste(title_plot, "-  iteration n = ", iter, sep=""), ylim=c(0,maxf+0.005), xlab="weight", ylab="density", col="green") 
 	curve(mixt2_univ(x,alpha0,mu0,sd0),min(x),max(x),add=TRUE,col="red",lwd=2)	
 	
-  readline(prompt="Press [enter] to continue")
+  #readline(prompt="Press [enter] to continue")
 	
 	L1<-L0
 
@@ -76,12 +76,12 @@ function(x, title_plot)
       L<-sum(log(p))
 #	cat(iter,L, "\t",alpha ,"\t",mu1,sd1,"\t",mu2,sd2,"\n")
 	cat(file="mixtdata.txt",iter,L,"\t",alpha,"\t",mu1,sd1,"\t",mu2,sd2,"\n",append=T)
-	mu<-c(mu1,mu2)
-	sd<-c(sd1,sd2)
-	maxf<-max(mixt2_univ(x,alpha,mu,sd),max(hist(x)$density))
-	hist(x, freq=F, main=paste(title_plot, "-  iteration n = ", iter, sep=""), ylim=c(0,maxf+0.005), xlab="weight", ylab="density", col="green") 
-	curve(mixt2_univ(x,alpha,mu,sd),min(x),max(x),add=TRUE,col="red",lwd=2)	
-	testit(0.2)
+	#mu<-c(mu1,mu2)
+	#sd<-c(sd1,sd2)
+	#maxf<-max(mixt2_univ(x,alpha,mu,sd),max(hist(x)$density))
+	#hist(x, freq=F, main=paste(title_plot, "-  iteration n = ", iter, sep=""), ylim=c(0,maxf+0.005), xlab="weight", ylab="density", col="green") 
+	#curve(mixt2_univ(x,alpha,mu,sd),min(x),max(x),add=TRUE,col="red",lwd=2)	
+	#testit(0.2)
 	if (abs(L1-L)<eps) break
 	L1<-L
 }
@@ -91,7 +91,7 @@ function(x, title_plot)
 	mu<-c(mu1,mu2)
 	sd<-c(sd1,sd2)
 	maxf<-max((mixt2_univ(x,alpha,mu,sd)))
-	hist(x, freq=F, main=title_plot, ,ylim=c(0,maxf+0.005), xlab="weight", ylab="frequency density", col="green") 
+	hist(x, freq=F, main=title_plot,ylim=c(0,maxf+0.005), xlab="weight", ylab="frequency density", col="green") 
 	curve(mixt2_univ(x,alpha,mu,sd),min(x),max(x),add=TRUE,col="red",lwd=2)	
 	em2<-c(alpha,mu,sd)
 
